@@ -100,7 +100,7 @@ export default function MarketsScreen() {
       'Financial Times': '#E91E63',
       'The Wall Street Journal': '#757575',
       'MarketWatch': '#FFC107',
-      "Barron's": '#9C27B0",
+      "Barron's": '#9C27B0',
       'Seeking Alpha': '#4CAF50',
     };
     return colors[source] || '#FFD700';
