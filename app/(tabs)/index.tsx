@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useUserStore } from '../../store/userStore';
 import { getQuotes } from '../../services/yahooFinance';
 import { getMarketNews } from '../../services/newsService';
@@ -37,6 +38,7 @@ const INITIAL_MARKET_INDICES: MarketIndex[] = [
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { name, loadFromStorage } = useUserStore();
   const [refreshing, setRefreshing] = useState(false);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>(INITIAL_MARKET_INDICES);
@@ -147,6 +149,16 @@ export default function DashboardScreen() {
         </View>
         <Text style={styles.notificationBell}>🔔</Text>
       </View>
+
+      {/* Search Bar */}
+      <TouchableOpacity
+        style={styles.searchBar}
+        onPress={() => router.push('/search')}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.searchIcon}>🔍</Text>
+        <Text style={styles.searchPlaceholder}>Search stocks, ETFs, crypto...</Text>
+      </TouchableOpacity>
 
       {/* Net Worth Card */}
       <View style={styles.netWorthCard}>
@@ -277,6 +289,27 @@ const styles = StyleSheet.create({
   },
   notificationBell: {
     fontSize: 24,
+  },
+
+  // Search Bar
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#141414',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#C9A84C',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 16,
+    gap: 8,
+  },
+  searchIcon: {
+    fontSize: 16,
+  },
+  searchPlaceholder: {
+    fontSize: 14,
+    color: '#666666',
   },
 
   // Net Worth Card

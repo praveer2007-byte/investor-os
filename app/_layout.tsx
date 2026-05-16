@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, ActivityIndicator } from 'react-native';
+import { ThemeProvider } from '../themes/ThemeContext';
 
 const COLORS = {
   black: '#0A0A0A',
@@ -58,5 +59,9 @@ export default function RootLayout() {
     );
   }
 
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <ThemeProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </ThemeProvider>
+  );
 }

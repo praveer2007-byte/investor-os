@@ -9,15 +9,104 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LineChart } from 'react-native-chart-kit';
+import Svg, { G, Circle, Text as SvgText } from 'react-native-svg';
 
 const MATTE_BLACK = '#0A0A0A';
 const GOLD = '#C9A84C';
 const WHITE = '#FFFFFF';
 const DARK_GRAY = '#1A1A1A';
 const LIGHT_GRAY = '#999999';
+const ALLOCATION_COLORS = ['#C9A84C', '#FF6B6B', '#4CAF50', '#2196F3', '#9C27B0'];
+
+// Helper to generate mock performance data
+const generatePerformanceData = (timeframe: string, baseValue: number) => {
+  let dataPoints = 30;
+  let labels: string[] = [];
+  let data: number[] = [];
+
+  if (timeframe === '1D') {
+    dataPoints = 24;
+    for (let i = 0; i < 24; i++) {
+      labels.push(`${i}:00`);
+      const noise = (Math.random() - 0.5) * 0.02 * baseValue;
+      const trend = (i / 24) * 0.05 * baseValue;
+      data.push(baseValue + noise + trend);
+    }
+  } else if (timeframe === '1W') {
+    dataPoints = 7;
+    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    for (let i = 0; i < 7; i++) {
+      labels.push(dayLabels[i]);
+      const noise = (Math.random() - 0.5) * 0.03 * baseValue;
+      const trend = (i / 7) * 0.08 * baseValue;
+      data.push(baseValue + noise + trend);
+    }
+  } else if (timeframe === '1M') {
+    dataPoints = 30;
+    for (let i = 0; i < 30; i++) {
+      labels.push(`${i + 1}`);
+      const noise = (Math.random() - 0.5) * 0.04 * baseValue;
+      const trend = (i / 30) * 0.12 * baseValue;
+      data.push(baseValue + noise + trend);
+    }
+  } else if (timeframe === '6M') {
+    dataPoints = 26;
+    const weeks = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12', 'W13', 'W14', 'W15', 'W16', 'W17', 'W18', 'W19', 'W20', 'W21', 'W22', 'W23', 'W24', 'W25', 'W26'];
+    for (let i = 0; i < 26; i++) {
+      labels.push(weeks[i]);
+      const noise = (Math.random() - 0.5) * 0.06 * baseValue;
+      const trend = (i / 26) * 0.25 * baseValue;
+      data.push(baseValue + noise + trend);
+    }
+  } else if (timeframe === 'YTD' || timeframe === '1Y') {
+    dataPoints = 12;
+    const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    for (let i = 0; i < 12; i++) {
+      labels.push(monthLabels[i]);
+      const noise = (Math.random() - 0.5) * 0.08 * baseValue;
+      const trend = (i / 12) * 0.28 * baseValue;
+      data.push(baseValue + noise + trend);
+    }
+  } else if (timeframe === '5Y') {
+    dataPoints = 60;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    for (let i = 0; i < 60; i++) {
+      if (i % 5 === 0) labels.push(months[(i / 5) % 12]);
+      else labels.push('');
+      const noise = (Math.random() - 0.5) * 0.1 * baseValue;
+      const trend = (i / 60) * 0.85 * baseValue;
+      data.push(baseValue + noise + trend);
+    }
+  } else {
+    dataPoints = 60;
+    for (let i = 0; i < 60; i++) {
+      labels.push(`Y${Math.floor(i / 12) + 1}`);
+      const noise = (Math.random() - 0.5) * 0.12 * baseValue;
+      const trend = (i / 60) * 1.2 * baseValue;
+      data.push(baseValue + noise + trend);
+    }
+  }
+
+  return { labels, data: data.map(v => Math.round(v)) };
+};
+
+// Calculate volatility from data
+const calculateVolatility = (data: number[]) => {
+  if (data.length < 2) return 0;
+  const returns: number[] = [];
+  for (let i = 1; i < data.length; i++) {
+    returns.push((data[i] - data[i - 1]) / data[i - 1]);
+  }
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
+  const stdDev = Math.sqrt(variance);
+  return Math.sqrt(252) * stdDev * 100;
+};
 
 interface Holding {
   id: string;
@@ -35,6 +124,71 @@ interface AllocationData {
   percentage: number;
   value: number;
 }
+
+// Donut Chart Component
+const DonutChart = ({
+  data,
+  totalValue,
+  colors
+}: {
+  data: AllocationData[],
+  totalValue: number,
+  colors: string[]
+}) => {
+  const size = 160;
+  const outerRadius = 80;
+  const innerRadius = 55;
+  const circumference = 2 * Math.PI * outerRadius;
+
+  let currentOffset = 0;
+  const slices = data.map((item, idx) => {
+    const percentage = item.percentage / 100;
+    const dashLength = percentage * circumference;
+    const dashArray = `${dashLength} ${circumference}`;
+    const offset = currentOffset;
+    currentOffset += dashLength;
+
+    return {
+      ...item,
+      dashArray,
+      offset,
+      color: colors[idx % colors.length],
+    };
+  });
+
+  return (
+    <View style={{ alignItems: 'center', marginVertical: 20 }}>
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <G x={size / 2} y={size / 2}>
+          {slices.map((slice, idx) => (
+            <Circle
+              key={idx}
+              r={outerRadius}
+              fill="none"
+              stroke={slice.color}
+              strokeWidth={outerRadius - innerRadius}
+              strokeDasharray={slice.dashArray}
+              strokeDashoffset={-slice.offset}
+              strokeLinecap="round"
+              rotation={0}
+            />
+          ))}
+          {/* Center text */}
+          <SvgText
+            x={0}
+            y={8}
+            textAnchor="middle"
+            fontSize="20"
+            fontWeight="700"
+            fill={WHITE}
+          >
+            ${(totalValue / 1000).toFixed(1)}K
+          </SvgText>
+        </G>
+      </Svg>
+    </View>
+  );
+};
 
 const STORAGE_KEY = 'portfolio_holdings';
 
@@ -301,23 +455,13 @@ export default function PortfolioScreen() {
       {/* Allocation Tab */}
       {activeTab === 'allocation' && (
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {/* Pie Chart Placeholder */}
-          <View style={styles.chartPlaceholder}>
-            <View style={styles.chartLegend}>
-              {allocationData.map((item, idx) => (
-                <View key={idx} style={styles.chartBlock}>
-                  <View
-                    style={[
-                      styles.colorIndicator,
-                      {
-                        backgroundColor: [GOLD, '#FF6B6B', '#4CAF50', '#2196F3', '#9C27B0'][idx % 5],
-                      },
-                    ]}
-                  />
-                </View>
-              ))}
-            </View>
-            <Text style={styles.placeholderText}>Allocation Chart</Text>
+          {/* Donut Chart */}
+          <View style={styles.chartContainer}>
+            <DonutChart
+              data={allocationData}
+              totalValue={calculateTotalValue()}
+              colors={ALLOCATION_COLORS}
+            />
           </View>
 
           {/* Breakdown List */}
@@ -366,48 +510,87 @@ export default function PortfolioScreen() {
             ))}
           </View>
 
-          {/* Chart Placeholder */}
-          <View style={styles.chartContainer}>
-            <View style={styles.chartContent}>
-              <View style={styles.yAxis}>
-                <Text style={styles.axisLabel}>${(calculateTotalValue() * 1.2).toFixed(0)}</Text>
-                <Text style={styles.axisLabel}>${(calculateTotalValue() * 0.9).toFixed(0)}</Text>
-              </View>
-              <View style={styles.chartLine} />
-            </View>
-            <View style={styles.xAxis}>
-              <Text style={styles.axisLabel}>Start</Text>
-              <Text style={styles.axisLabel}>End</Text>
-            </View>
-          </View>
+          {/* Real Performance Chart */}
+          {(() => {
+            const baseValue = calculateTotalValue();
+            const { labels, data: chartData } = generatePerformanceData(selectedTimeframe, baseValue);
+            const volatility = calculateVolatility(chartData);
+            const minValue = Math.min(...chartData);
+            const maxValue = Math.max(...chartData);
+            const screenWidth = Dimensions.get('window').width - 32;
 
-          {/* Stats Grid */}
-          <View style={styles.statsGrid}>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Total Return</Text>
-              <Text style={[styles.statValue, { color: '#4CAF50' }]}>+{calculatePLPercent().toFixed(2)}%</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Annualized Return</Text>
-              <Text style={[styles.statValue, { color: '#4CAF50' }]}>+{(calculatePLPercent() * 0.3).toFixed(2)}%</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Best Day</Text>
-              <Text style={[styles.statValue, { color: '#4CAF50' }]}>+$2,847.35</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Worst Day</Text>
-              <Text style={[styles.statValue, { color: '#FF6B6B' }]}>-$1,532.19</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Volatility</Text>
-              <Text style={styles.statValue}>--</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Sharpe Ratio</Text>
-              <Text style={styles.statValue}>1.42</Text>
-            </View>
-          </View>
+            return (
+              <>
+                <View style={styles.chartCardContainer}>
+                  <LineChart
+                    data={{
+                      labels,
+                      datasets: [
+                        {
+                          data: chartData.map(v => v),
+                          color: () => GOLD,
+                          strokeWidth: 2,
+                        },
+                      ],
+                    }}
+                    width={screenWidth}
+                    height={220}
+                    chartConfig={{
+                      backgroundColor: MATTE_BLACK,
+                      backgroundGradientFrom: DARK_GRAY,
+                      backgroundGradientTo: MATTE_BLACK,
+                      decimalPlaces: 0,
+                      color: (opacity = 1) => `rgba(201, 168, 76, ${opacity})`,
+                      labelColor: () => '#666666',
+                      propsForDots: {
+                        r: '3',
+                        strokeWidth: '1',
+                        stroke: GOLD,
+                      },
+                      propsForBackgroundLines: {
+                        stroke: '#1A1A1A',
+                      },
+                    }}
+                    bezier
+                    style={{
+                      borderRadius: 12,
+                      marginBottom: 20,
+                    }}
+                    withInnerLines={true}
+                    withOuterLines={false}
+                  />
+                </View>
+
+                {/* Stats Grid */}
+                <View style={styles.statsGrid}>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>Total Return</Text>
+                    <Text style={[styles.statValue, { color: '#4CAF50' }]}>+{calculatePLPercent().toFixed(2)}%</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>Annualized Return</Text>
+                    <Text style={[styles.statValue, { color: '#4CAF50' }]}>+{(calculatePLPercent() * 0.3).toFixed(2)}%</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>Best Day</Text>
+                    <Text style={[styles.statValue, { color: '#4CAF50' }]}>+$2,847.35</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>Worst Day</Text>
+                    <Text style={[styles.statValue, { color: '#FF6B6B' }]}>-$1,532.19</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>Volatility</Text>
+                    <Text style={styles.statValue}>{volatility.toFixed(1)}%</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statLabel}>Sharpe Ratio</Text>
+                    <Text style={styles.statValue}>1.42</Text>
+                  </View>
+                </View>
+              </>
+            );
+          })()}
 
           <View style={{ height: 100 }} />
         </ScrollView>
@@ -684,37 +867,14 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: '700',
   },
-  chartPlaceholder: {
+  chartCardContainer: {
     backgroundColor: DARK_GRAY,
     borderRadius: 12,
-    padding: 20,
+    padding: 16,
     marginBottom: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 250,
     borderColor: '#262626',
     borderWidth: 1,
-  },
-  chartLegend: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-  },
-  chartBlock: {
-    width: 40,
-    height: 40,
-    borderRadius: 6,
-  },
-  colorIndicator: {
-    flex: 1,
-    borderRadius: 6,
-  },
-  placeholderText: {
-    color: LIGHT_GRAY,
-    fontSize: 14,
-    marginTop: 8,
+    overflow: 'hidden',
   },
   breakdownList: {
     gap: 12,
@@ -783,35 +943,10 @@ const styles = StyleSheet.create({
   chartContainer: {
     backgroundColor: DARK_GRAY,
     borderRadius: 12,
-    padding: 20,
+    padding: 16,
     marginBottom: 20,
-    height: 200,
     borderColor: '#262626',
     borderWidth: 1,
-  },
-  chartContent: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  yAxis: {
-    width: 50,
-    justifyContent: 'space-between',
-    marginRight: 10,
-  },
-  chartLine: {
-    flex: 1,
-    borderBottomColor: LIGHT_GRAY,
-    borderBottomWidth: 1,
-    marginBottom: 10,
-  },
-  xAxis: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  axisLabel: {
-    color: LIGHT_GRAY,
-    fontSize: 11,
   },
   statsGrid: {
     flexDirection: 'row',

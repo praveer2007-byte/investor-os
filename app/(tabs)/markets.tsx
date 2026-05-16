@@ -8,8 +8,12 @@ import {
   TextInput,
   ActivityIndicator,
   FlatList,
+  RefreshControl,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getMarketNews, NewsItem as ServiceNewsItem } from '../../services/newsService';
+import { getQuotes, Quote } from '../../services/yahooFinance';
 
 const MATTE_BLACK = '#0A0A0A';
 const GOLD = '#C9A84C';
@@ -17,12 +21,8 @@ const WHITE = '#FFFFFF';
 const DARK_GRAY = '#1A1A1A';
 const LIGHT_GRAY = '#999999';
 
-interface NewsItem {
-  id: string;
-  title: string;
-  source: string;
-  time: string;
-  summary: string;
+interface NewsItem extends ServiceNewsItem {
+  timeAgo: string;
 }
 
 interface BenchmarkStats {
@@ -32,39 +32,41 @@ interface BenchmarkStats {
   outperforming: boolean;
 }
 
+interface BenchmarkQuote {
+  name: string;
+  symbol: string;
+  price: number;
+  changePercent: number;
+  change: number;
+}
+
+type CategoryFilter = 'All' | 'Macro' | 'Tech' | 'Energy' | 'Markets' | 'ETFs';
+
 export default function MarketsScreen() {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<'news' | 'benchmarks'>('news');
   const [searchInput, setSearchInput] = useState('');
-  const [newsItems, setNewsItems] = useState<NewsItem[]>([
-    {
-      id: '1',
-      title: 'Fed signals potential rate cuts ahead',
-      source: 'Reuters',
-      time: '2h ago',
-      summary: 'Federal Reserve officials suggest interest rate cuts may be on the horizon as inflation continues to cool...',
-    },
-    {
-      id: '2',
-      title: 'Tech stocks rally on AI optimism',
-      source: 'Bloomberg',
-      time: '4h ago',
-      summary: 'Major technology companies gained following announcements of new AI capabilities and strong earnings...',
-    },
-    {
-      id: '3',
-      title: 'Oil prices steady amid supply concerns',
-      source: 'CNBC',
-      time: '6h ago',
-      summary: 'Crude oil prices remain stable as the market assesses geopolitical tensions and OPEC production decisions...',
-    },
-  ]);
+  const [allNews, setAllNews] = useState<NewsItem[]>([]);
+  const [displayedNews, setDisplayedNews] = useState<NewsItem[]>([]);
   const [selectedBenchmark, setSelectedBenchmark] = useState('S&P 500');
   const [selectedTimeframe, setSelectedTimeframe] = useState('1M');
-  const [isLoadingNews, setIsLoadingNews] = useState(false);
+  const [isLoadingNews, setIsLoadingNews] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<CategoryFilter>('All');
+  const [benchmarkQuote, setBenchmarkQuote] = useState<BenchmarkQuote | null>(null);
+  const [isLoadingBenchmark, setIsLoadingBenchmark] = useState(false);
 
   const benchmarks = ['S&P 500', 'NASDAQ', 'STI', 'DJIA', 'FTSE 100', 'Nikkei'];
+  const benchmarkSymbols: Record<string, string> = {
+    'S&P 500': '^GSPC',
+    'NASDAQ': '^IXIC',
+    'STI': '^STI',
+    'DJIA': '^DJI',
+    'FTSE 100': '^FTSE',
+    'Nikkei': '^N225',
+  };
   const timeframes = ['1M', '6M', 'YTD', '1Y', '5Y'];
+  const categories: CategoryFilter[] = ['All', 'Macro', 'Tech', 'Energy', 'Markets', 'ETFs'];
 
   const benchmarkStats: BenchmarkStats[] = [
     { metric: 'Total Return', yourPortfolio: '+12.4%', benchmark: '+8.2%', outperforming: true },
@@ -75,64 +77,167 @@ export default function MarketsScreen() {
     { metric: 'Sharpe Ratio', yourPortfolio: '1.24', benchmark: '0.89', outperforming: true },
   ];
 
+  // Utility functions
+  function getTimeAgo(timestamp: number): string {
+    const now = Date.now();
+    const diff = now - timestamp;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return 'just now';
+  }
+
+  function getSourceColor(source: string): string {
+    const colors: Record<string, string> = {
+      'Reuters': '#1E88E5',
+      'Bloomberg': '#FF9800',
+      'CNBC': '#D32F2F',
+      'Financial Times': '#E91E63',
+      'The Wall Street Journal': '#757575',
+      'MarketWatch': '#FFC107',
+      "Barron's": '#9C27B0",
+      'Seeking Alpha': '#4CAF50',
+    };
+    return colors[source] || '#FFD700';
+  }
+
+  function categorizeNews(title: string): string[] {
+    const categories: string[] = [];
+    const titleLower = title.toLowerCase();
+
+    if (/fed|inflation|rate|gdp|economy|central bank|dollar|yen/i.test(titleLower)) {
+      categories.push('Macro');
+    }
+    if (/tech|ai|apple|microsoft|nvidia|semiconductor|google|amazon|meta|tesla/i.test(titleLower)) {
+      categories.push('Tech');
+    }
+    if (/oil|gas|energy|opec|crude|renewable|solar|wind/i.test(titleLower)) {
+      categories.push('Energy');
+    }
+    if (/etf|fund|index|vanguard|blackrock|ishares|spdr|passive/i.test(titleLower)) {
+      categories.push('ETFs');
+    }
+    if (/s&p|nasdaq|rally|selloff|market|dow|index|equity|stock/i.test(titleLower)) {
+      categories.push('Markets');
+    }
+
+    return categories;
+  }
+
+  function matchesCategory(title: string, category: CategoryFilter): boolean {
+    if (category === 'All') return true;
+    const categories = categorizeNews(title);
+    return categories.includes(category);
+  }
+
+  // Fetch news on mount
+  useEffect(() => {
+    const loadNews = async () => {
+      setIsLoadingNews(true);
+      try {
+        const news = await getMarketNews();
+        const newsWithTimeAgo = news.map((item) => ({
+          ...item,
+          timeAgo: getTimeAgo(item.publishedAt),
+        }));
+        setAllNews(newsWithTimeAgo);
+        filterNews(newsWithTimeAgo, selectedCategory, searchInput);
+      } catch (error) {
+        console.error('Error loading news:', error);
+      } finally {
+        setIsLoadingNews(false);
+      }
+    };
+
+    loadNews();
+  }, []);
+
+  // Filter news based on category and search
+  function filterNews(news: NewsItem[], category: CategoryFilter, search: string) {
+    let filtered = news.filter((item) => matchesCategory(item.title, category));
+
+    if (search.length > 0) {
+      filtered = filtered.filter(
+        (item) =>
+          item.title.toLowerCase().includes(search.toLowerCase()) ||
+          item.source.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+
+    setDisplayedNews(filtered);
+  }
+
+  // Handle search
   const handleSearchNews = (text: string) => {
     setSearchInput(text);
-    if (text.length > 0) {
-      setIsLoadingNews(true);
-      // Simulate API call
-      setTimeout(() => {
-        const filtered = [
-          {
-            id: '1',
-            title: 'Fed signals potential rate cuts ahead',
-            source: 'Reuters',
-            time: '2h ago',
-            summary: 'Federal Reserve officials suggest interest rate cuts may be on the horizon as inflation continues to cool...',
-          },
-          {
-            id: '2',
-            title: 'Tech stocks rally on AI optimism',
-            source: 'Bloomberg',
-            time: '4h ago',
-            summary: 'Major technology companies gained following announcements of new AI capabilities and strong earnings...',
-          },
-        ].filter(
-          (item) =>
-            item.title.toLowerCase().includes(text.toLowerCase()) ||
-            item.source.toLowerCase().includes(text.toLowerCase())
-        );
-        setNewsItems(filtered);
-        setIsLoadingNews(false);
-      }, 500);
-    } else {
-      setNewsItems([
-        {
-          id: '1',
-          title: 'Fed signals potential rate cuts ahead',
-          source: 'Reuters',
-          time: '2h ago',
-          summary: 'Federal Reserve officials suggest interest rate cuts may be on the horizon as inflation continues to cool...',
-        },
-        {
-          id: '2',
-          title: 'Tech stocks rally on AI optimism',
-          source: 'Bloomberg',
-          time: '4h ago',
-          summary: 'Major technology companies gained following announcements of new AI capabilities and strong earnings...',
-        },
-        {
-          id: '3',
-          title: 'Oil prices steady amid supply concerns',
-          source: 'CNBC',
-          time: '6h ago',
-          summary: 'Crude oil prices remain stable as the market assesses geopolitical tensions and OPEC production decisions...',
-        },
-      ]);
+    filterNews(allNews, selectedCategory, text);
+  };
+
+  // Handle category filter
+  const handleCategoryFilter = (category: CategoryFilter) => {
+    setSelectedCategory(category);
+    filterNews(allNews, category, searchInput);
+  };
+
+  // Fetch benchmark data
+  const loadBenchmarkData = async (benchmarkName: string) => {
+    setIsLoadingBenchmark(true);
+    try {
+      const symbol = benchmarkSymbols[benchmarkName];
+      if (symbol) {
+        const quotes = await getQuotes([symbol]);
+        if (quotes.length > 0) {
+          const quote = quotes[0];
+          setBenchmarkQuote({
+            name: benchmarkName,
+            symbol: quote.symbol,
+            price: quote.price,
+            change: quote.change,
+            changePercent: quote.changePercent,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error loading benchmark data:', error);
+    } finally {
+      setIsLoadingBenchmark(false);
+    }
+  };
+
+  // Load benchmark data when selected benchmark changes
+  useEffect(() => {
+    loadBenchmarkData(selectedBenchmark);
+  }, [selectedBenchmark]);
+
+  // Handle pull to refresh
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      const news = await getMarketNews();
+      const newsWithTimeAgo = news.map((item) => ({
+        ...item,
+        timeAgo: getTimeAgo(item.publishedAt),
+      }));
+      setAllNews(newsWithTimeAgo);
+      filterNews(newsWithTimeAgo, selectedCategory, searchInput);
+    } catch (error) {
+      console.error('Error refreshing news:', error);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
   const renderNewsCard = (item: NewsItem) => (
-    <View key={item.id} style={styles.newsCard}>
+    <TouchableOpacity
+      key={item.id}
+      style={styles.newsCard}
+      onPress={() => item.url && Linking.openURL(item.url)}
+    >
       <View style={styles.newsHeader}>
         <View style={styles.newsTitle}>
           <Text style={styles.newsHeading}>{item.title}</Text>
@@ -143,9 +248,23 @@ export default function MarketsScreen() {
       </View>
       <Text style={styles.newsSummary}>{item.summary}</Text>
       <View style={styles.newsFooter}>
-        <Text style={styles.newsSource}>{item.source}</Text>
-        <Text style={styles.newsTime}>{item.time}</Text>
+        <View style={[styles.sourceBadge, { backgroundColor: getSourceColor(item.source) }]}>
+          <Text style={styles.newsSource}>{item.source}</Text>
+        </View>
+        <Text style={styles.newsTime}>{item.timeAgo}</Text>
       </View>
+    </TouchableOpacity>
+  );
+
+  const renderLoadingSkeleton = () => (
+    <View style={styles.newsList}>
+      {[0, 1, 2].map((idx) => (
+        <View key={`skeleton-${idx}`} style={styles.skeletonCard}>
+          <View style={styles.skeletonLine} />
+          <View style={[styles.skeletonLine, { width: '80%', marginTop: 8 }]} />
+          <View style={[styles.skeletonLine, { width: '60%', marginTop: 8 }]} />
+        </View>
+      ))}
     </View>
   );
 
@@ -200,17 +319,52 @@ export default function MarketsScreen() {
             />
           </View>
 
+          {/* Category Filter Chips */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryContainer}>
+            {categories.map((category) => (
+              <TouchableOpacity
+                key={category}
+                style={[
+                  styles.categoryChip,
+                  selectedCategory === category && styles.activeCategoryChip,
+                ]}
+                onPress={() => handleCategoryFilter(category)}
+              >
+                <Text
+                  style={[
+                    styles.categoryChipText,
+                    selectedCategory === category && styles.activeCategoryChipText,
+                  ]}
+                >
+                  {category}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
           {/* News List */}
           {isLoadingNews ? (
-            <View style={styles.loaderContainer}>
-              <ActivityIndicator size="large" color={GOLD} />
-            </View>
-          ) : (
             <ScrollView showsVerticalScrollIndicator={false}>
-              <View style={styles.newsList}>
-                {newsItems.map((item) => renderNewsCard(item))}
-              </View>
+              {renderLoadingSkeleton()}
               <View style={{ height: 50 }} />
+            </ScrollView>
+          ) : (
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={GOLD} />}
+            >
+              {displayedNews.length > 0 ? (
+                <>
+                  <View style={styles.newsList}>
+                    {displayedNews.map((item) => renderNewsCard(item))}
+                  </View>
+                  <View style={{ height: 50 }} />
+                </>
+              ) : (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyText}>No news found</Text>
+                </View>
+              )}
             </ScrollView>
           )}
         </View>
@@ -246,6 +400,34 @@ export default function MarketsScreen() {
               ))}
             </ScrollView>
           </View>
+
+          {/* Benchmark Quote Card */}
+          {isLoadingBenchmark ? (
+            <View style={styles.quoteCard}>
+              <ActivityIndicator size="small" color={GOLD} />
+            </View>
+          ) : benchmarkQuote ? (
+            <View style={styles.quoteCard}>
+              <View style={styles.quoteHeader}>
+                <View>
+                  <Text style={styles.quoteName}>{benchmarkQuote.name}</Text>
+                  <Text style={styles.quoteSymbol}>{benchmarkQuote.symbol}</Text>
+                </View>
+                <View style={styles.quotePrice}>
+                  <Text style={styles.quotePriceValue}>${benchmarkQuote.price.toFixed(2)}</Text>
+                  <Text
+                    style={[
+                      styles.quoteChange,
+                      { color: benchmarkQuote.change >= 0 ? '#4CAF50' : '#F44336' },
+                    ]}
+                  >
+                    {benchmarkQuote.change >= 0 ? '+' : ''}
+                    {benchmarkQuote.changePercent.toFixed(2)}%
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
 
           {/* Timeframe Selector */}
           <View style={styles.timeframeContainer}>
@@ -356,10 +538,46 @@ const styles = StyleSheet.create({
     color: WHITE,
     fontSize: 14,
   },
+  categoryContainer: {
+    marginBottom: 12,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
+  },
+  categoryChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderColor: '#262626',
+    borderWidth: 1,
+    marginRight: 8,
+    backgroundColor: DARK_GRAY,
+  },
+  activeCategoryChip: {
+    backgroundColor: GOLD,
+    borderColor: GOLD,
+  },
+  categoryChipText: {
+    color: LIGHT_GRAY,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  activeCategoryChipText: {
+    color: MATTE_BLACK,
+  },
   loaderContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyText: {
+    color: LIGHT_GRAY,
+    fontSize: 14,
   },
   newsList: {
     gap: 12,
@@ -407,14 +625,32 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  sourceBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
   newsSource: {
-    color: GOLD,
-    fontSize: 11,
-    fontWeight: '600',
+    color: WHITE,
+    fontSize: 10,
+    fontWeight: '700',
   },
   newsTime: {
     color: LIGHT_GRAY,
     fontSize: 11,
+  },
+  skeletonCard: {
+    backgroundColor: DARK_GRAY,
+    borderRadius: 8,
+    padding: 12,
+    borderColor: '#262626',
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  skeletonLine: {
+    height: 12,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 4,
   },
   benchmarkHeader: {
     color: WHITE,
@@ -447,6 +683,42 @@ const styles = StyleSheet.create({
   },
   activeBenchmarkChipText: {
     color: MATTE_BLACK,
+  },
+  quoteCard: {
+    backgroundColor: DARK_GRAY,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderColor: '#262626',
+    borderWidth: 1,
+  },
+  quoteHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  quoteName: {
+    color: WHITE,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  quoteSymbol: {
+    color: LIGHT_GRAY,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  quotePrice: {
+    alignItems: 'flex-end',
+  },
+  quotePriceValue: {
+    color: WHITE,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  quoteChange: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
   },
   timeframeContainer: {
     flexDirection: 'row',

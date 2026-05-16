@@ -10,22 +10,17 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useUserStore } from '../../store/userStore';
-
-interface Theme {
-  id: string;
-  name: string;
-  description: string;
-}
+import { useTheme } from '../../themes/ThemeContext';
 
 interface AIPersonality {
   id: string;
   name: string;
 }
 
-const THEMES: Theme[] = [
-  { id: 'premium-light', name: 'Premium Light', description: 'Clean and bright' },
-  { id: 'institutional-black', name: 'Institutional Black', description: 'Current dark theme' },
-  { id: 'zen-wealth', name: 'Zen Wealth', description: 'Minimalist & calm' },
+const THEME_CARDS = [
+  { id: 'institutional-black', name: 'Institutional Black', subtitle: 'Default dark mode' },
+  { id: 'premium-light', name: 'Premium Light', subtitle: 'Clean & minimal' },
+  { id: 'zen-wealth', name: 'Zen Wealth', subtitle: 'Calm & focused' },
 ];
 
 const AI_PERSONALITIES: AIPersonality[] = [
@@ -40,8 +35,8 @@ const AI_PERSONALITIES: AIPersonality[] = [
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { name, investingStyle, riskTolerance, tier, reset, updateProfile } = useUserStore();
+  const { theme, setTheme } = useTheme();
 
-  const [selectedTheme, setSelectedTheme] = useState('institutional-black');
   const [selectedAIPersonality, setSelectedAIPersonality] = useState('balanced');
 
   useEffect(() => {
@@ -50,22 +45,18 @@ export default function SettingsScreen() {
 
   const loadSettings = async () => {
     try {
-      const themeData = await AsyncStorage.getItem('@investoros_theme');
       const aiData = await AsyncStorage.getItem('@investoros_ai_personality');
-
-      if (themeData) setSelectedTheme(themeData);
       if (aiData) setSelectedAIPersonality(aiData);
     } catch (error) {
       console.error('Error loading settings:', error);
     }
   };
 
-  const saveTheme = async (themeId: string) => {
+  const handleThemeChange = async (themeId: string) => {
     try {
-      setSelectedTheme(themeId);
-      await AsyncStorage.setItem('@investoros_theme', themeId);
+      await setTheme(themeId as 'institutional-black' | 'premium-light' | 'zen-wealth');
     } catch (error) {
-      console.error('Error saving theme:', error);
+      console.error('Error changing theme:', error);
     }
   };
 
@@ -164,22 +155,22 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Appearance</Text>
         <View style={styles.themeGrid}>
-          {THEMES.map((theme) => (
+          {THEME_CARDS.map((themeCard) => (
             <TouchableOpacity
-              key={theme.id}
+              key={themeCard.id}
               style={[
                 styles.themeCard,
-                selectedTheme === theme.id && styles.themeCardActive,
+                theme.id === themeCard.id && styles.themeCardActive,
               ]}
-              onPress={() => saveTheme(theme.id)}
+              onPress={() => handleThemeChange(themeCard.id)}
             >
-              <View style={styles.themeCheckmark}>
-                {selectedTheme === theme.id && (
-                  <Text style={styles.checkmark}>✓</Text>
-                )}
+              <View style={styles.themeContent}>
+                <Text style={styles.themeName}>{themeCard.name}</Text>
+                <Text style={styles.themeSubtitle}>{themeCard.subtitle}</Text>
               </View>
-              <Text style={styles.themeName}>{theme.name}</Text>
-              <Text style={styles.themeDescription}>{theme.description}</Text>
+              {theme.id === themeCard.id && (
+                <Text style={styles.checkmark}>✓</Text>
+              )}
             </TouchableOpacity>
           ))}
         </View>
@@ -348,49 +339,39 @@ const styles = StyleSheet.create({
 
   // Appearance / Theme Section
   themeGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    gap: 8,
+    gap: 12,
   },
   themeCard: {
-    width: '48%',
     backgroundColor: '#141414',
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: '#1E1E1E',
-    padding: 14,
+    borderColor: '#222222',
+    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
   themeCardActive: {
     borderColor: '#C9A84C',
   },
-  themeCheckmark: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: '#C9A84C',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
+  themeContent: {
+    flex: 1,
   },
   checkmark: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
     color: '#C9A84C',
+    marginLeft: 12,
   },
   themeName: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
     marginBottom: 4,
-    textAlign: 'center',
   },
-  themeDescription: {
-    fontSize: 11,
+  themeSubtitle: {
+    fontSize: 12,
     color: '#888888',
-    textAlign: 'center',
     fontWeight: '400',
   },
 
